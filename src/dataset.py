@@ -1,0 +1,105 @@
+"""
+APTOS 2019 Dataset loader for Diabetic Retinopathy Severity Classification.
+"""
+
+import os
+import pandas as pd
+import numpy as np
+from PIL import Image
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from sklearn.model_selection import train_test_split
+
+
+class APTOSDataset(Dataset):
+    """APTOS 2019 Blindness Detection dataset."""
+
+    def __init__(self, df, img_dir, transform=None):
+        """
+        Args:
+            df: DataFrame with 'id_code' and 'diagnosis' columns
+            img_dir: Path to directory containing images
+            transform: Optional transform to apply to images
+        """
+        self.df = df.reset_index(drop=True)
+        self.img_dir = img_dir
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        img_name = os.path.join(self.img_dir, self.df.loc[idx, 'id_code'] + '.png')
+        # Try .jpeg if .png not found
+        if not os.path.exists(img_name):
+            img_name = os.path.join(self.img_dir, self.df.loc[idx, 'id_code'] + '.jpeg')
+        if not os.path.exists(img_name):
+            img_name = os.path.join(self.img_dir, self.df.loc[idx, 'id_code'] + '.jpg')
+
+        image = Image.open(img_name).convert('RGB')
+        label = int(self.df.loc[idx, 'diagnosis'])
+
+        if self.transform:
+            image = self.transform(image)
+
+        return image, label
+
+
+def get_transforms(img_size=224):
+    """Return basic train and val transforms — intentionally minimal for baseline."""
+    train_transform = transforms.Compose([
+        transforms.Resize((img_size, img_size)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
+    ])
+
+    val_transform = transforms.Compose([
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
+    ])
+
+    return train_transform, val_transform
+
+
+def load_data(csv_path, img_dir, img_size=224, batch_size=32, val_size=0.15, test_size=0.15, seed=42):
+    """
+    Load APTOS dataset and return DataLoaders for train/val/test splits.
+
+    Uses stratified splitting to preserve class distribution.
+    No oversampling — intentionally left out for baseline to highlight class imbalance effect.
+    """
+    df = pd.read_csv(csv_path)
+
+    # Stratified train/val/test split
+    train_df, temp_df = train_test_split(
+        df, test_size=(val_size + test_size), stratify=df['diagnosis'], random_state=seed
+    )
+    relative_test = test_size / (val_size + test_size)
+    val_df, test_df = train_test_split(
+        temp_df, test_size=relative_test, stratify=temp_df['diagnosis'], random_state=seed
+    )
+
+    print(f"Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
+    print(f"Train class distribution:\n{train_df['diagnosis'].value_counts().sort_index()}\n")
+
+    train_transform, val_transform = get_transforms(img_size)
+
+    train_dataset = APTOSDataset(train_df, img_dir, transform=train_transform)
+    val_dataset = APTOSDataset(val_df, img_dir, transform=val_transform)
+    test_dataset = APTOSDataset(test_df, img_dir, transform=val_transform)
+
+    import platform
+    # num_workers > 0 causes slowdowns on macOS with MPS; pin_memory not supported on MPS
+    num_workers = 0 if platform.system() == 'Darwin' else 2
+    pin_memory = False if platform.system() == 'Darwin' else True
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
+
+    return train_loader, val_loader, test_loader, train_df, val_df, test_df
