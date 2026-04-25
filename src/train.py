@@ -93,6 +93,53 @@ def train(model, train_loader, val_loader, optimizer, criterion, scheduler, devi
     return history
 
 
+def train_improved(model, train_loader, val_loader, optimizer, criterion, scheduler, device, num_epochs=30):
+    """
+    Training loop for the improved model.
+
+    Key differences from train():
+    - Best checkpoint is saved by macro F1, not accuracy (right metric for imbalanced classes)
+    - scheduler.step() called with no argument (compatible with CosineAnnealingLR)
+    - val_f1 is logged each epoch
+    """
+    history = {
+        'train_loss': [], 'train_acc': [],
+        'val_loss': [],   'val_acc': [],  'val_f1': []
+    }
+    best_val_f1 = 0.0
+    best_state = None
+
+    for epoch in range(1, num_epochs + 1):
+        t0 = time.time()
+        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        val_loss, val_acc, val_labels, val_preds = evaluate(model, val_loader, criterion, device)
+
+        val_f1 = f1_score(val_labels, val_preds, average='macro')
+
+        if scheduler is not None:
+            scheduler.step()
+
+        history['train_loss'].append(train_loss)
+        history['train_acc'].append(train_acc)
+        history['val_loss'].append(val_loss)
+        history['val_acc'].append(val_acc)
+        history['val_f1'].append(val_f1)
+
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+
+        elapsed = time.time() - t0
+        print(f"Epoch [{epoch:02d}/{num_epochs}] "
+              f"Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} | "
+              f"Val Loss: {val_loss:.4f} Acc: {val_acc:.4f} F1: {val_f1:.4f} | "
+              f"Time: {elapsed:.1f}s")
+
+    print(f"\nBest Val Macro F1: {best_val_f1:.4f}")
+    model.load_state_dict(best_state)
+    return history
+
+
 def print_metrics(labels, preds):
     """Print full classification report and confusion matrix."""
     print("\n=== Classification Report ===")

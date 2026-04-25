@@ -66,6 +66,50 @@ def get_transforms(img_size=224):
     return train_transform, val_transform
 
 
+def get_improved_transforms(img_size=224):
+    """
+    Richer augmentation pipeline suited for retinal fundus images.
+
+    Additions over baseline:
+    - Vertical flip (valid: fundus images have no canonical orientation)
+    - Rotation up to 15 deg (cameras/patients vary)
+    - ColorJitter: accounts for inter-camera brightness/contrast differences
+    - RandomResizedCrop: mild scale and crop variation
+    """
+    _mean = [0.485, 0.456, 0.406]
+    _std  = [0.229, 0.224, 0.225]
+
+    train_transform = transforms.Compose([
+        transforms.Resize((img_size + 16, img_size + 16)),  # slight oversize before crop
+        transforms.RandomResizedCrop(img_size, scale=(0.85, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(15),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=_mean, std=_std),
+    ])
+
+    val_transform = transforms.Compose([
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=_mean, std=_std),
+    ])
+
+    return train_transform, val_transform
+
+
+def compute_class_weights(train_df, num_classes=5):
+    """
+    Inverse-frequency class weights for CrossEntropyLoss.
+    Returns a float32 tensor of shape (num_classes,).
+    """
+    counts = train_df['diagnosis'].value_counts().sort_index()
+    total = len(train_df)
+    weights = total / (num_classes * counts.values.astype(float))
+    return torch.tensor(weights, dtype=torch.float32)
+
+
 def load_data(csv_path, img_dir, img_size=224, batch_size=32, val_size=0.15, test_size=0.15, seed=42):
     """
     Load APTOS dataset and return DataLoaders for train/val/test splits.
