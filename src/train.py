@@ -3,6 +3,7 @@ Training and evaluation utilities for the baseline DR classification model.
 """
 
 import time
+from contextlib import nullcontext
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,19 +15,38 @@ from sklearn.metrics import (
 CLASS_NAMES = ['No DR (0)', 'Mild (1)', 'Moderate (2)', 'Severe (3)', 'Proliferative (4)']
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device):
+def _maybe_autocast(device, use_amp):
+    if use_amp and device.type == 'cuda':
+        return torch.autocast(device_type='cuda', dtype=torch.float16)
+    return nullcontext()
+
+
+def train_one_epoch(model, loader, optimizer, criterion, device, scaler=None, use_amp=False, max_grad_norm=None):
     model.train()
     running_loss = 0.0
     all_preds, all_labels = [], []
 
     for images, labels in loader:
-        images, labels = images.to(device), labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        with _maybe_autocast(device, use_amp):
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            if max_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
 
         running_loss += loss.item() * images.size(0)
         preds = outputs.argmax(dim=1).cpu().numpy()
@@ -39,15 +59,17 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
 
 
 @torch.no_grad()
-def evaluate(model, loader, criterion, device):
+def evaluate(model, loader, criterion, device, use_amp=False):
     model.eval()
     running_loss = 0.0
     all_preds, all_labels = [], []
 
     for images, labels in loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+        with _maybe_autocast(device, use_amp):
+            outputs = model(images)
+            loss = criterion(outputs, labels)
 
         running_loss += loss.item() * images.size(0)
         preds = outputs.argmax(dim=1).cpu().numpy()
@@ -93,7 +115,18 @@ def train(model, train_loader, val_loader, optimizer, criterion, scheduler, devi
     return history
 
 
-def train_improved(model, train_loader, val_loader, optimizer, criterion, scheduler, device, num_epochs=30):
+def train_improved(
+    model,
+    train_loader,
+    val_loader,
+    optimizer,
+    criterion,
+    scheduler,
+    device,
+    num_epochs=30,
+    use_amp=True,
+    max_grad_norm=1.0,
+):
     """
     Training loop for the improved model.
 
@@ -108,11 +141,27 @@ def train_improved(model, train_loader, val_loader, optimizer, criterion, schedu
     }
     best_val_f1 = 0.0
     best_state = None
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp and device.type == 'cuda')
 
     for epoch in range(1, num_epochs + 1):
         t0 = time.time()
-        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
-        val_loss, val_acc, val_labels, val_preds = evaluate(model, val_loader, criterion, device)
+        train_loss, train_acc = train_one_epoch(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            scaler=scaler,
+            use_amp=use_amp,
+            max_grad_norm=max_grad_norm,
+        )
+        val_loss, val_acc, val_labels, val_preds = evaluate(
+            model,
+            val_loader,
+            criterion,
+            device,
+            use_amp=use_amp,
+        )
 
         val_f1 = f1_score(val_labels, val_preds, average='macro')
 

@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from PIL import Image
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision import transforms
 from sklearn.model_selection import train_test_split
 
@@ -104,10 +104,30 @@ def compute_class_weights(train_df, num_classes=5):
     Inverse-frequency class weights for CrossEntropyLoss.
     Returns a float32 tensor of shape (num_classes,).
     """
-    counts = train_df['diagnosis'].value_counts().sort_index()
+    counts = (
+        train_df['diagnosis']
+        .value_counts()
+        .reindex(range(num_classes), fill_value=0)
+        .sort_index()
+    )
     total = len(train_df)
-    weights = total / (num_classes * counts.values.astype(float))
+    weights = np.zeros(num_classes, dtype=np.float32)
+    nonzero = counts.values > 0
+    weights[nonzero] = total / (num_classes * counts.values[nonzero].astype(float))
     return torch.tensor(weights, dtype=torch.float32)
+
+
+def create_weighted_sampler(train_df, num_classes=5):
+    """
+    Build a WeightedRandomSampler so minority classes are seen more often.
+    """
+    class_weights = compute_class_weights(train_df, num_classes=num_classes)
+    sample_weights = class_weights[train_df['diagnosis'].to_numpy()].double()
+    return WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True,
+    )
 
 
 def load_data(csv_path, img_dir, img_size=224, batch_size=32, val_size=0.15, test_size=0.15, seed=42):
