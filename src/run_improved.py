@@ -50,6 +50,7 @@ def parse_args():
     parser.add_argument('--freeze-backbone', action='store_true')
     parser.add_argument('--no-sampler', action='store_true')
     parser.add_argument('--no-amp', action='store_true')
+    parser.add_argument('--preprocess', action='store_true')
     return parser.parse_args()
 
 
@@ -90,9 +91,9 @@ def make_loaders(args):
     print(f"Train class distribution:\n{train_df['diagnosis'].value_counts().sort_index()}\n")
 
     train_transform, val_transform = get_improved_transforms(args.img_size)
-    train_dataset = APTOSDataset(train_df, args.img_dir, transform=train_transform)
-    val_dataset = APTOSDataset(val_df, args.img_dir, transform=val_transform)
-    test_dataset = APTOSDataset(test_df, args.img_dir, transform=val_transform)
+    train_dataset = APTOSDataset(train_df, args.img_dir, transform=train_transform, preprocess=args.preprocess)
+    val_dataset = APTOSDataset(val_df, args.img_dir, transform=val_transform, preprocess=args.preprocess)
+    test_dataset = APTOSDataset(test_df, args.img_dir, transform=val_transform, preprocess=args.preprocess)
 
     sampler = None if args.no_sampler else create_weighted_sampler(train_df, num_classes=5)
     train_loader = DataLoader(
