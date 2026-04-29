@@ -3,6 +3,7 @@ APTOS 2019 Dataset loader for Diabetic Retinopathy Severity Classification.
 """
 
 import os
+import cv2
 import pandas as pd
 import numpy as np
 from PIL import Image
@@ -12,26 +13,42 @@ from torchvision import transforms
 from sklearn.model_selection import train_test_split
 
 
+def _crop_fundus(img_np):
+    """Crop to the fundus circle, removing black border padding."""
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return img_np
+    x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
+    return img_np[y:y + h, x:x + w]
+
+
+def preprocess_fundus(img_np, sigmaX=30):
+    """
+    Ben Graham preprocessing: crop to fundus circle then subtract local mean lighting.
+    Dramatically reduces inter-image lighting/camera variation in APTOS images.
+    """
+    img_np = _crop_fundus(img_np)
+    blurred = cv2.GaussianBlur(img_np, (0, 0), sigmaX)
+    img_np = cv2.addWeighted(img_np, 4, blurred, -4, 128)
+    return np.clip(img_np, 0, 255).astype(np.uint8)
+
+
 class APTOSDataset(Dataset):
     """APTOS 2019 Blindness Detection dataset."""
 
-    def __init__(self, df, img_dir, transform=None):
-        """
-        Args:
-            df: DataFrame with 'id_code' and 'diagnosis' columns
-            img_dir: Path to directory containing images
-            transform: Optional transform to apply to images
-        """
+    def __init__(self, df, img_dir, transform=None, preprocess=False):
         self.df = df.reset_index(drop=True)
         self.img_dir = img_dir
         self.transform = transform
+        self.preprocess = preprocess
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
         img_name = os.path.join(self.img_dir, self.df.loc[idx, 'id_code'] + '.png')
-        # Try .jpeg if .png not found
         if not os.path.exists(img_name):
             img_name = os.path.join(self.img_dir, self.df.loc[idx, 'id_code'] + '.jpeg')
         if not os.path.exists(img_name):
@@ -39,6 +56,9 @@ class APTOSDataset(Dataset):
 
         image = Image.open(img_name).convert('RGB')
         label = int(self.df.loc[idx, 'diagnosis'])
+
+        if self.preprocess:
+            image = Image.fromarray(preprocess_fundus(np.array(image)))
 
         if self.transform:
             image = self.transform(image)

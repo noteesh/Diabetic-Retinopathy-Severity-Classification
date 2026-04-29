@@ -4,16 +4,16 @@ from torchvision import models
 
 class ImprovedDRClassifier(nn.Module):
     """
-    EfficientNet-B0 fine-tuned for 5-class DR severity classification.
+    EfficientNet-B4 fine-tuned for 5-class DR severity classification.
     Pretrained on ImageNet; classifier head replaced with a lightweight MLP.
     """
 
     def __init__(self, num_classes=5, dropout=0.3, freeze_backbone=False):
         super().__init__()
-        weights = models.EfficientNet_B0_Weights.IMAGENET1K_V1
-        self.model = models.efficientnet_b0(weights=weights)
+        weights = models.EfficientNet_B4_Weights.IMAGENET1K_V1
+        self.model = models.efficientnet_b4(weights=weights)
 
-        in_features = self.model.classifier[1].in_features  # 1280
+        in_features = self.model.classifier[1].in_features  # 1792
         self.model.classifier = nn.Sequential(
             nn.Dropout(p=dropout, inplace=True),
             nn.Linear(in_features, num_classes),
